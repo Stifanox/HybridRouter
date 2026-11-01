@@ -1,0 +1,112 @@
+model_name: "nyc_yellow_taxi_analytics"
+description: "Model analityczny przejazdów taksówek w Nowym Jorku (BigQuery Public Dataset)"
+
+storage:
+  bigquery:
+    project_id: "twoj-projekt-gcp"
+    dataset_table: "bigquery-public-data.new_york_taxi_trips.tlc_yellow_trips_2022"
+    timestamp_column: "pickup_datetime"
+    partition_granularity: "DAY"
+    use_query_cache: false # false = uczciwe pomiary latencji/kosztu (benchmarki)
+  local_cache:
+    base_path: "./data/nyc_taxi"
+    file_format: "parquet"
+    partition_scheme: "hive" # data/nyc_taxi/pickup_date=YYYY-MM-DD/rollup.parquet
+    partition_key: "pickup_date" # musi być nazwą wymiaru typu date z in_rollup: true
+    # Domyślny zakres materializacji dla SyncWorkera (gdy nie podano --start-date/--end-date).
+    # NIE jest źródłem prawdy dla routera – ten sprawdza fizyczną obecność partycji (Moduł 2).
+    date_window_start: "2022-10-01"
+    date_window_end: "2022-12-31"
+
+cost_guard:
+  enabled: true
+  price_per_tb_usd: 6.25
+  max_bytes_per_query: 10737418240 # 10 GiB twardy limit
+  max_cost_usd_per_query: 0.0625
+  action_on_exceed: "require_confirmation" # "raise_error" (HTTP 403), "require_confirmation" (HTTP 409) lub "silent_allow" (wykonaj mimo przekroczenia)
+
+# Wymiary (Dimensions) - flaga in_rollup określa, czy wymiar jest zapisywany w lokalnym Parquet
+dimensions:
+  pickup_date:
+    sql: "DATE(pickup_datetime)"
+    type: "date"
+    in_rollup: true
+  vendor_id:
+    sql: "CAST(vendor_id AS STRING)"
+    type: "string"
+    in_rollup: true
+  payment_type:
+    sql: "CAST(payment_type AS STRING)"
+    type: "string"
+    in_rollup: true
+  rate_code:
+    sql: "CAST(rate_code AS STRING)"
+    type: "string"
+    in_rollup: true
+  # Wymiar szczegółowy (Wysoka kardynalność) - NIEOBECNY w lokalnym rollupie DuckDB!
+  # Zapytanie o ten wymiar w trybie 'auto' wymusi fallback do BigQuery.
+  dropoff_location_id:
+    sql: "CAST(dropoff_location_id AS STRING)"
+    type: "string"
+    in_rollup: false
+
+# Miary Bazowe (Base Measures). Dozwolone aggregation – rejestr AGGREGATIONS (ADR-010):
+#   SUM, COUNT, MIN, MAX  – rozdzielne, materializowane w Parquet;
+#   COUNT_DISTINCT        – holistyczna, NIE trafia do rollupu, zapytania z nią idą do BigQuery (ADR-011);
+#   AVG                   – zabronione (zdefiniuj jako metrykę pochodną SUM/COUNT).
+base_measures:
+  trips_count:
+    aggregation: "COUNT"
+    sql: "1"
+  total_fare_amount:
+    aggregation: "SUM"
+    sql: "fare_amount"
+  total_tip_amount:
+    aggregation: "SUM"
+    sql: "tip_amount"
+  total_revenue:
+    aggregation: "SUM"
+    sql: "total_amount"
+  total_distance_miles:
+    aggregation: "SUM"
+    sql: "trip_distance"
+  total_passenger_count:
+    aggregation: "SUM"
+    sql: "passenger_count"
+  total_duration_seconds:
+    aggregation: "SUM"
+    sql: "TIMESTAMP_DIFF(dropoff_datetime, pickup_datetime, SECOND)"
+  # Miara holistyczna (przypadek badawczy ADR-011) – nazwa kolumny do weryfikacji dry_run
+  unique_pickup_zones:
+    aggregation: "COUNT_DISTINCT"
+    sql: "pickup_location_id"
+
+# Miary Pochodne (Derived Metrics - Nieaddytywne, wyliczane w locie po zgrupowaniu!)
+derived_metrics:
+  # Wskaźnik proporcjonalny (odpowiednik ROI)
+  tip_to_fare_ratio_pct:
+    formula: "(total_tip_amount / total_fare_amount) * 100"
+    description: "Stosunek napiwków do kwoty bazowej przejazdu w procentach"
+
+  # Wielopoziomowa metryka pochodna (odwołuje się do miar bazowych)
+  non_fare_surcharges:
+    formula: "total_revenue - total_fare_amount - total_tip_amount"
+    description: "Suma podatków, opłat drogowych i dopłat"
+
+  surcharge_to_revenue_roi_pct:
+    formula: "(non_fare_surcharges / total_revenue) * 100"
+    description: "Udział opłat dodatkowych w całkowitym przychodzie (%)"
+
+  # Średnie ważone (nigdy nie uśredniamy średnich!)
+  avg_revenue_per_mile:
+    formula: "total_revenue / total_distance_miles"
+    description: "Średni przychód na jedną przejechaną milę ($/mile)"
+
+  avg_trip_speed_mph:
+    formula: "total_distance_miles / (total_duration_seconds / 3600.0)"
+    description: "Rzeczywista średnia ważona prędkość przejazdów w milach na godzinę"
+
+  # Funkcja skalarna z rejestru SCALAR_FUNCTIONS (ADR-010)
+  avg_fare_per_trip:
+    formula: "ROUND(total_fare_amount / trips_count, 2)"
+    description: "Średnia opłata bazowa na przejazd (zaokrąglona do centów)"

@@ -1,0 +1,26 @@
+# Środowisko i IDE
+.venv/
+.idea/
+.vscode/
+
+# Dane lokalnego cache (rollupy Parquet) – generowane, nie wersjonowane
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Narzędzia
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Pliki tymczasowe atomowego zapisu (ADR-005)
+*.parquet.tmp
