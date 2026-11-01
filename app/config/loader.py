@@ -5,8 +5,8 @@ Potok walidacji jednego pliku:
 1. odczyt YAML (z wykrywaniem zduplikowanych kluczy, których PyYAML domyślnie nie zgłasza),
 2. walidacja pól modelami Pydantic (``app.config.schemas``),
 3. walidacja strukturalna – reguły międzypolowe (``STRUCTURAL_VALIDATORS``),
-4. walidacja semantyczna – **punkt rozszerzenia** (``SEMANTIC_VALIDATORS``), wypełniany
-   w etapie A2 (rejestr agregacji, parser formuł, rozwijanie zależności).
+4. walidacja semantyczna (``SEMANTIC_VALIDATORS``, ``app.semantic.validator`` – rejestr
+   agregacji, parser formuł, rozwijanie zależności).
 
 Każdy błąd na dowolnym etapie zgłaszany jest jednym typem wyjątku –
 :class:`ConfigValidationError` – ze wskazaniem pliku i ścieżki pola.
@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -24,36 +23,21 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from app.config.errors import ConfigIssue, ConfigValidationError
 from app.config.schemas import ModelConfig
+from app.semantic.validator import validate_semantics
 
-# --------------------------------------------------------------------------- #
-# Błędy
-# --------------------------------------------------------------------------- #
-
-
-@dataclass(frozen=True, slots=True)
-class ConfigIssue:
-    """Pojedynczy problem w konfiguracji: ścieżka pola (np. ``storage.local_cache``) i opis."""
-
-    path: str
-    message: str
-
-    def __str__(self) -> str:
-        return f"{self.path}: {self.message}" if self.path else self.message
-
-
-class ConfigValidationError(Exception):
-    """Jedyny typ błędu zgłaszany przez warstwę konfiguracji.
-
-    ``source`` wskazuje plik (lub katalog), ``issues`` – wszystkie wykryte problemy.
-    """
-
-    def __init__(self, source: str | Path, issues: Iterable[ConfigIssue]) -> None:
-        self.source = str(source)
-        self.issues: tuple[ConfigIssue, ...] = tuple(issues)
-        lines = "\n".join(f"  - {issue}" for issue in self.issues)
-        super().__init__(f"Invalid configuration in '{self.source}':\n{lines}")
-
+__all__ = [
+    "SEMANTIC_VALIDATORS",
+    "STRUCTURAL_VALIDATORS",
+    "ConfigIssue",
+    "ConfigValidationError",
+    "ModelRegistry",
+    "ModelValidator",
+    "load_model_dict",
+    "load_model_file",
+    "load_models_dir",
+]
 
 ModelValidator = Callable[[ModelConfig], Iterable[ConfigIssue]]
 """Walidator modelu: zwraca (lub generuje) listę problemów; pusta lista = model poprawny."""
@@ -184,10 +168,10 @@ STRUCTURAL_VALIDATORS: tuple[ModelValidator, ...] = (
 """Reguły strukturalne. Pola pojedyncze (Literal, dodatniość ``cost_guard``,
 niepuste ``aggregation``) sprawdzają modele Pydantic."""
 
-SEMANTIC_VALIDATORS: tuple[ModelValidator, ...] = ()
-"""PUNKT ROZSZERZENIA (etap A2): walidatory semantyczne, uruchamiane wyłącznie dla
-modeli poprawnych strukturalnie – m.in. zgodność ``aggregation`` z rejestrem
-``AGGREGATIONS``, parsowanie formuł, rozwijanie zależności i wykrywanie cykli."""
+SEMANTIC_VALIDATORS: tuple[ModelValidator, ...] = (validate_semantics,)
+"""Walidatory semantyczne (etap A2), uruchamiane wyłącznie dla modeli poprawnych
+strukturalnie: zgodność ``aggregation`` z rejestrem ``AGGREGATIONS``, parsowanie formuł
+(biała lista), rozwijanie zależności, wykrywanie cykli i nieznanych nazw."""
 
 
 # --------------------------------------------------------------------------- #

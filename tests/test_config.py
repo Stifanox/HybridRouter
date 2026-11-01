@@ -371,8 +371,10 @@ def test_malformed_yaml_is_rejected(tmp_path: Path, content: str, expected: str)
 # --------------------------------------------------------------------------- #
 
 
-def test_no_semantic_validators_registered_in_a1() -> None:
-    assert SEMANTIC_VALIDATORS == ()
+def test_semantic_validators_registered_by_a2() -> None:
+    from app.semantic.validator import validate_semantics
+
+    assert (validate_semantics,) == SEMANTIC_VALIDATORS
 
 
 def _forbid_avg(model: ModelConfig) -> Iterator[ConfigIssue]:
