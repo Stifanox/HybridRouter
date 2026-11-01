@@ -12,6 +12,7 @@ from app.semantic.errors import (
     CircularDependencyError,
     ConstantFormulaError,
     DimensionInFormulaError,
+    DivisionByZeroLiteralError,
     FormulaSyntaxError,
     UnknownAggregationError,
     UnknownMeasureError,
@@ -221,3 +222,21 @@ def test_substitute_replaces_only_listed_refs() -> None:
 )
 def test_suggest(name: str, expected: str | None) -> None:
     assert suggest(name, ["total_revenue", "trips_count"]) == expected
+
+
+@pytest.mark.parametrize(
+    "formula", ["total_tip_amount / 0", "total_tip_amount / -0.0", "(total_tip_amount / 0) * 100"]
+)
+def test_division_by_constant_zero_rejected(
+    raw: dict[str, Any], structural: ConfigFactory, formula: str
+) -> None:
+    raw["derived_metrics"]["broken"] = {"formula": formula}
+    with pytest.raises(DivisionByZeroLiteralError, match="division by constant zero"):
+        build_semantic_model(structural(raw))
+
+
+def test_division_by_nonzero_constant_accepted(
+    raw: dict[str, Any], structural: ConfigFactory
+) -> None:
+    raw["derived_metrics"]["ok"] = {"formula": "total_tip_amount / -3600.0 + total_tip_amount * 0"}
+    assert build_semantic_model(structural(raw)).get_metric("ok").additive

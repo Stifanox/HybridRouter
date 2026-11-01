@@ -10,8 +10,9 @@
 
 Rozszerzanie: nowa funkcja to nowy wpis w krotce ``_AGGREGATION_SPECS`` lub
 ``_SCALAR_FUNCTION_SPECS`` – parser formuł i walidator korzystają z rejestrów i nie
-wymagają zmian. Renderowanie zależne od dialektu (etap A3) podłącza się przez pole
-``dialect_renderers``; moduł nie zależy od ``sqlglot``.
+wymagają zmian. Renderowanie do ``sqlglot`` realizuje ``app.renderers.base``; pole
+``dialect_renderers`` pozwala nadpisać je dla wybranego dialektu (A3, obecnie używane tylko
+przez renderer funkcji skalarnych); moduł nie zależy od ``sqlglot``.
 
 Klucze rejestrów są kanoniczne (wielkie litery); wyszukiwanie przez
 :func:`get_aggregation` / :func:`get_scalar_function` nie rozróżnia wielkości liter.
@@ -25,8 +26,12 @@ from types import MappingProxyType
 from typing import Any, Protocol, TypeVar
 
 DialectRenderer = Callable[..., Any]
-"""PUNKT ROZSZERZENIA (A3): funkcja budująca wyrażenie SQL danego dialektu z już
-wyrenderowanych argumentów. Typ celowo ogólny – warstwa semantyczna nie zna ``sqlglot``."""
+"""Nadpisanie renderowania funkcji dla jednego dialektu (klucz: nazwa dialektu ``sqlglot``,
+np. ``"duckdb"``). Kontrakt (A3, ``app.renderers.base.FunctionBuilder``): przyjmuje
+sekwencję już wyrenderowanych argumentów (``sqlglot.exp.Expr``) i zwraca węzeł
+``sqlglot.exp.Expr``. Typ celowo ogólny – warstwa semantyczna nie zna ``sqlglot``.
+Domyślne renderowanie (bez wpisu) zapewnia renderer: ``exp.func(nazwa, ...)`` lub builder z
+``SCALAR_FUNCTION_BUILDERS`` / ``AGGREGATE_BUILDERS``."""
 
 
 @dataclass(frozen=True, slots=True)

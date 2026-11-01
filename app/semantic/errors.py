@@ -87,6 +87,17 @@ class ConstantFormulaError(SemanticError):
         super().__init__(metric, f"formula '{formula}' must reference at least one measure")
 
 
+class DivisionByZeroLiteralError(SemanticError):
+    """Dzielenie przez stałą zero (np. ``x / 0``) – wynik byłby zawsze ``NULL``.
+
+    Renderer i tak chroniłby takie dzielenie (``NULLIF(0, 0)``), ale formuła o stałej
+    wartości ``NULL`` jest niemal na pewno pomyłką autora – zgłaszana przy ładowaniu.
+    """
+
+    def __init__(self, metric: str, formula: str) -> None:
+        super().__init__(metric, f"division by constant zero in formula '{formula}'")
+
+
 class UnknownAggregationError(SemanticError):
     """``aggregation`` miary bazowej spoza rejestru ``AGGREGATIONS`` (lub zabroniona, jak AVG)."""
 

@@ -6,7 +6,7 @@ odwołuje). Resolver:
 1. sprawdza ``aggregation`` miar bazowych w rejestrze ``AGGREGATIONS`` (ADR-010),
 2. parsuje formuły (biała lista, ``formula_parser``),
 3. sprawdza bezpośrednie odwołania: nieznane nazwy (z podpowiedzią), wymiary, formuły
-   bez żadnej miary,
+   bez żadnej miary oraz dzielenie przez stałą zero,
 4. przechodzi graf w głąb (DFS) z wykrywaniem cykli i podstawia AST metryk pochodnych,
    aż wszystkie liście ``MeasureRef`` wskazują miary bazowe,
 5. wyznacza zbiór miar bazowych i addytywność każdej metryki (ADR-011: metryka jest
@@ -40,6 +40,7 @@ from app.semantic.errors import (
     CircularDependencyError,
     ConstantFormulaError,
     DimensionInFormulaError,
+    DivisionByZeroLiteralError,
     SemanticError,
     UnknownAggregationError,
     UnknownMeasureError,
@@ -138,6 +139,21 @@ def _ordered_refs(expr: Expr) -> list[str]:
     return list(dict.fromkeys(node.name for node in walk(expr) if isinstance(node, MeasureRef)))
 
 
+def _is_zero_constant(expr: Expr) -> bool:
+    match expr:
+        case Literal(value=value):
+            return value == 0
+        case UnaryOp(operand=operand):
+            return _is_zero_constant(operand)
+        case _:
+            return False
+
+
+def _divides_by_zero(node: Expr) -> bool:
+    """``x / 0`` lub ``x / -0`` (dzielnik będący stałą zero)."""
+    return isinstance(node, BinaryOp) and node.op == "/" and _is_zero_constant(node.right)
+
+
 # --------------------------------------------------------------------------- #
 # Analiza
 # --------------------------------------------------------------------------- #
@@ -198,6 +214,8 @@ class _Resolver:
             refs = _ordered_refs(expr)
             if not refs:
                 self._fail(name, ConstantFormulaError(name, self._derived[name].formula))
+            if any(_divides_by_zero(node) for node in walk(expr)):
+                self._fail(name, DivisionByZeroLiteralError(name, self._derived[name].formula))
             for ref in refs:
                 if ref in self._base or ref in self._derived:
                     continue

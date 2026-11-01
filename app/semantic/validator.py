@@ -7,7 +7,7 @@ Funkcja :func:`validate_semantics` ma sygnaturę ``ModelValidator`` z ``app.conf
 * ``aggregation`` każdej miary bazowej istnieje w ``AGGREGATIONS``; ``AVG`` jest
   odrzucane z podpowiedzią (metryka pochodna SUM/COUNT),
 * każda formuła parsuje się według białej listy i rozwija do miar bazowych
-  (brak cykli, nieznanych nazw i odwołań do wymiarów).
+  (brak cykli, nieznanych nazw i odwołań do wymiarów, brak dzielenia przez stałą zero).
 
 Addytywność metryk (``ResolvedMetric.additive``) wyznacza resolver; walidator jedynie
 raportuje błędy. Moduł nie importuje loadera (unikanie cyklu importów).
