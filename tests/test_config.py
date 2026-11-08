@@ -54,6 +54,8 @@ def test_load_nyc_taxi_file() -> None:
     assert model.model_name == "nyc_yellow_taxi_analytics"
     assert model.storage.bigquery.partition_granularity == "DAY"
     assert model.storage.bigquery.use_query_cache is False
+    assert model.storage.bigquery.location == "US"
+    assert model.storage.bigquery.job_timeout_s == 120
     cache = model.storage.local_cache
     assert cache.partition_key == "pickup_date"
     assert cache.partition_scheme == "hive"
@@ -149,6 +151,34 @@ def test_cost_guard_values_must_be_positive(raw: dict[str, Any], field: str, val
     with pytest.raises(ConfigValidationError) as exc_info:
         load_model_dict(raw)
     assert any(i.startswith(f"cost_guard.{field}:") for i in _issues(exc_info))
+
+
+@pytest.mark.parametrize("value", [0, -1.5])
+def test_job_timeout_must_be_positive(raw: dict[str, Any], value: float) -> None:
+    raw["storage"]["bigquery"]["job_timeout_s"] = value
+    with pytest.raises(ConfigValidationError) as exc_info:
+        load_model_dict(raw)
+    assert any(i.startswith("storage.bigquery.job_timeout_s:") for i in _issues(exc_info))
+
+
+def test_job_timeout_has_default(raw: dict[str, Any]) -> None:
+    del raw["storage"]["bigquery"]["job_timeout_s"]
+    assert load_model_dict(raw).storage.bigquery.job_timeout_s == 120
+
+
+@pytest.mark.parametrize("value", ["", "   ", None])
+def test_location_must_be_non_empty(raw: dict[str, Any], value: object) -> None:
+    raw["storage"]["bigquery"]["location"] = value
+    with pytest.raises(ConfigValidationError) as exc_info:
+        load_model_dict(raw)
+    assert any(i.startswith("storage.bigquery.location:") for i in _issues(exc_info))
+
+
+def test_location_is_required(raw: dict[str, Any]) -> None:
+    del raw["storage"]["bigquery"]["location"]
+    with pytest.raises(ConfigValidationError) as exc_info:
+        load_model_dict(raw)
+    assert any(i.startswith("storage.bigquery.location:") for i in _issues(exc_info))
 
 
 @pytest.mark.parametrize("value", ["", "   ", None, 5])

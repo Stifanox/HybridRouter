@@ -19,7 +19,12 @@ from app.api import service as service_module
 from app.api.service import QueryService
 from app.config.errors import ConfigIssue, ConfigValidationError
 from app.config.settings import Settings
-from app.executors.base import ExecutionResult, QueryExecutionError, QueryExecutor
+from app.executors.base import (
+    ExecutionOptions,
+    ExecutionResult,
+    QueryExecutionError,
+    QueryExecutor,
+)
 from app.main import create_app
 from app.renderers.errors import NonAdditiveMeasureError
 from tests.api.conftest import CONFIG_DIR, COVERED_FILTERS, GAP_FILTERS, BodyFactory
@@ -430,7 +435,7 @@ class _FailingExecutor(QueryExecutor):
     def __init__(self, error: Exception) -> None:
         self.error = error
 
-    def execute(self, sql: str) -> ExecutionResult:
+    def execute(self, sql: str, options: ExecutionOptions | None = None) -> ExecutionResult:
         raise self.error
 
 

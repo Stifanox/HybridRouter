@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app.config.errors import ConfigValidationError
 from app.config.loader import load_model_file
@@ -23,21 +24,50 @@ def test_settings_from_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     monkeypatch.setenv("HYBRID_ROUTER_DATA_ROOT", str(tmp_path / "data"))
     monkeypatch.setenv("HYBRID_ROUTER_INDEX_CHECK_INTERVAL", "2.5")
     monkeypatch.setenv("HYBRID_ROUTER_DUCKDB_THREADS", "2")
+    monkeypatch.setenv("HYBRID_ROUTER_BIGQUERY_BACKEND", "fake")
+    monkeypatch.setenv("HYBRID_ROUTER_THREADPOOL_SIZE", "8")
+    monkeypatch.setenv("HYBRID_ROUTER_FAKE_RAW_PATH", str(tmp_path / "raw.parquet"))
     settings = Settings()
     assert settings.config_dir == tmp_path / "cfg"
     assert settings.data_root == tmp_path / "data"
     assert settings.index_check_interval == 2.5
     assert settings.duckdb_threads == 2
+    assert settings.bigquery_backend == "fake"
+    assert settings.threadpool_size == 8
+    assert settings.fake_raw_path == tmp_path / "raw.parquet"
 
 
 def test_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("CONFIG_DIR", "DATA_ROOT", "INDEX_CHECK_INTERVAL", "DUCKDB_THREADS"):
+    for name in (
+        "CONFIG_DIR",
+        "DATA_ROOT",
+        "INDEX_CHECK_INTERVAL",
+        "DUCKDB_THREADS",
+        "BIGQUERY_BACKEND",
+        "THREADPOOL_SIZE",
+        "FAKE_RAW_PATH",
+    ):
         monkeypatch.delenv(f"HYBRID_ROUTER_{name}", raising=False)
     settings = Settings()
     assert settings.config_dir == Path("configs")
     assert settings.data_root is None
     assert settings.index_check_interval == 0.0
     assert settings.duckdb_threads is None
+    assert settings.bigquery_backend == "disabled"
+    assert settings.threadpool_size == 40
+    assert settings.fake_raw_path is None
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [("BIGQUERY_BACKEND", "emulator"), ("THREADPOOL_SIZE", "0"), ("THREADPOOL_SIZE", "-3")],
+)
+def test_settings_reject_invalid_values(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(f"HYBRID_ROUTER_{name}", value)
+    with pytest.raises(ValidationError):
+        Settings()
 
 
 def test_cache_path_respects_data_root(tmp_path: Path) -> None:

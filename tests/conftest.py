@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,24 @@ from app.sync.local_builder import build_local_rollups
 from app.sync.materializer import MaterializationResult
 from app.sync.partition_index import PartitionIndex, PartitionSnapshot
 from tests.fixtures.synthetic import generate_trips
+
+BQ_INTEGRATION_ENV = "HYBRID_ROUTER_BQ_INTEGRATION"
+"""``1`` włącza testy z markerem ``bigquery`` (prawdziwe BigQuery: sieć i koszt)."""
+
+
+def bigquery_tests_enabled(environ: Mapping[str, str] = os.environ) -> bool:
+    return environ.get(BQ_INTEGRATION_ENV) == "1"
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Domyślnie pomija testy ``@pytest.mark.bigquery`` (zasady wspólne, pkt 7)."""
+    if bigquery_tests_enabled():
+        return
+    skip = pytest.mark.skip(reason=f"BigQuery integration test; set {BQ_INTEGRATION_ENV}=1")
+    for item in items:
+        if item.get_closest_marker("bigquery") is not None:
+            item.add_marker(skip)
+
 
 NYC_TAXI_YAML = Path(__file__).resolve().parents[1] / "configs" / "nyc_taxi.yaml"
 MODEL_NAME = "nyc_yellow_taxi_analytics"

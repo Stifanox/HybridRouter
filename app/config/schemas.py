@@ -40,12 +40,23 @@ class _FrozenModel(BaseModel):
 # storage
 # --------------------------------------------------------------------------- #
 class BigQueryStorageConfig(_FrozenModel):
-    """Źródło surowych danych w BigQuery (``storage.bigquery``)."""
+    """Źródło surowych danych w BigQuery (``storage.bigquery``).
+
+    * ``project_id`` – projekt rozliczeniowy, w którym uruchamiane są zadania,
+    * ``dataset_table`` – tabela robocza (docelowo własna partycjonowana kopia, F2-3),
+    * ``location`` – region zadań (np. ``US``); zbiór publiczny NYC TLC leży w ``US``,
+      a BigQuery nie łączy danych z różnych regionów (F2-6),
+    * ``job_timeout_s`` – limit czasu zadania (s); po przekroczeniu zadanie jest anulowane
+      (F2-10),
+    * ``use_query_cache`` – cache wyników BigQuery (``false`` = uczciwe pomiary).
+    """
 
     project_id: NonEmptyStr
     dataset_table: NonEmptyStr
     timestamp_column: NonEmptyStr
     partition_granularity: PartitionGranularity
+    location: NonEmptyStr
+    job_timeout_s: float = Field(default=120.0, gt=0)
     use_query_cache: StrictBool = False
 
 

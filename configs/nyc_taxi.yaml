@@ -3,10 +3,15 @@ description: "Model analityczny przejazdów taksówek w Nowym Jorku (BigQuery Pu
 
 storage:
   bigquery:
-    project_id: "twoj-projekt-gcp"
+    project_id: "twoj-projekt-gcp" # projekt rozliczeniowy, w którym uruchamiane są zadania
+    # Placeholder do czasu utworzenia kopii: docelowo własna partycjonowana kopia (F2-3), np.
+    # "twoj-projekt-gcp.hybrid_router.yellow_trips"; tabela publiczna pozostaje źródłem danych
+    # dla scripts/bq_load.py i opcjonalnym punktem odniesienia w benchmarku.
     dataset_table: "bigquery-public-data.new_york_taxi_trips.tlc_yellow_trips_2022"
     timestamp_column: "pickup_datetime"
     partition_granularity: "DAY"
+    location: "US" # region zadań; zbiór publiczny NYC TLC leży w multiregionie US (F2-6)
+    job_timeout_s: 120 # limit czasu zadania; po przekroczeniu zadanie jest anulowane (HTTP 504)
     use_query_cache: false # false = uczciwe pomiary latencji/kosztu (benchmarki)
   local_cache:
     base_path: "./data/nyc_taxi"

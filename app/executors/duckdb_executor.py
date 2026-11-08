@@ -23,7 +23,12 @@ from collections.abc import Mapping
 
 import duckdb
 
-from app.executors.base import ExecutionResult, QueryExecutionError, QueryExecutor
+from app.executors.base import (
+    ExecutionOptions,
+    ExecutionResult,
+    QueryExecutionError,
+    QueryExecutor,
+)
 
 ConfigValue = str | int | bool | float
 
@@ -40,7 +45,8 @@ class DuckDBExecutor(QueryExecutor):
         self._lock = threading.Lock()
         self._closed = False
 
-    def execute(self, sql: str) -> ExecutionResult:
+    def execute(self, sql: str, options: ExecutionOptions | None = None) -> ExecutionResult:
+        """Wykonuje zapytanie; ``options`` są ignorowane (brak strażnika kosztów)."""
         cursor = self._cursor()
         try:
             started = time.perf_counter_ns()

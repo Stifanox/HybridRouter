@@ -9,7 +9,12 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from app.executors.base import ExecutionResult, QueryExecutionError, QueryExecutor
+from app.executors.base import (
+    ExecutionOptions,
+    ExecutionResult,
+    QueryExecutionError,
+    QueryExecutor,
+)
 from app.executors.duckdb_executor import DuckDBExecutor
 from app.renderers.rollup import RollupRenderer
 from app.sync.partition_index import PartitionSnapshot
@@ -32,6 +37,16 @@ def test_result_and_timing(executor: DuckDBExecutor) -> None:
     assert result.to_rows() == [{"a": 1, "b": "x"}, {"a": 2, "b": None}]
     assert result.execution_time_ns > 0
     assert result.execution_time_ms == result.execution_time_ns / 1_000_000
+    assert result.warehouse is None
+
+
+@pytest.mark.parametrize("options", [None, ExecutionOptions(), ExecutionOptions(True)])
+def test_execution_options_are_ignored(
+    executor: DuckDBExecutor, options: ExecutionOptions | None
+) -> None:
+    result = executor.execute("SELECT 42 AS answer", options)
+    assert result.to_rows() == [{"answer": 42}]
+    assert result.warehouse is None
 
 
 def test_empty_result(executor: DuckDBExecutor) -> None:
