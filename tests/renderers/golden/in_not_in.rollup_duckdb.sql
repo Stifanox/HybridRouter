@@ -3,7 +3,13 @@ SELECT
   rate_code,
   SUM(total_fare_amount) AS total_fare_amount,
   SUM(total_revenue) / NULLIF(SUM(total_distance_miles), 0) AS avg_revenue_per_mile
-FROM READ_PARQUET('./data/nyc_taxi/pickup_date=*/rollup.parquet', hive_partitioning = TRUE)
+FROM READ_PARQUET(
+  [
+    './data/nyc_taxi/pickup_date=2022-12-01/rollup-00000001.parquet',
+    './data/nyc_taxi/pickup_date=2022-12-02/rollup-00000002.parquet'
+  ],
+  hive_partitioning = TRUE
+)
 WHERE
   pickup_date IN (CAST('2022-12-01' AS DATE), CAST('2022-12-02' AS DATE))
   AND vendor_id IN ('1', '2')

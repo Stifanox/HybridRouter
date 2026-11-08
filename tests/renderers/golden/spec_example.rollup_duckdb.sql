@@ -1,7 +1,7 @@
 SELECT
   pickup_date,
   vendor_id,
-  SUM(trips_count) AS trips_count,
+  COALESCE(SUM(trips_count), 0) AS trips_count,
   SUM(total_revenue) AS total_revenue,
   (
     SUM(total_tip_amount) / NULLIF(SUM(total_fare_amount), 0)
@@ -9,7 +9,13 @@ SELECT
   SUM(total_distance_miles) / NULLIF((
     SUM(total_duration_seconds) / 3600.0
   ), 0) AS avg_trip_speed_mph
-FROM READ_PARQUET('./data/nyc_taxi/pickup_date=*/rollup.parquet', hive_partitioning = TRUE)
+FROM READ_PARQUET(
+  [
+    './data/nyc_taxi/pickup_date=2022-12-01/rollup-00000001.parquet',
+    './data/nyc_taxi/pickup_date=2022-12-02/rollup-00000002.parquet'
+  ],
+  hive_partitioning = TRUE
+)
 WHERE
   pickup_date >= CAST('2022-12-01' AS DATE)
   AND pickup_date <= CAST('2022-12-23' AS DATE)

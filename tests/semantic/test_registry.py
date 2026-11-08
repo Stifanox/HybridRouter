@@ -29,6 +29,17 @@ def test_aggregations_content() -> None:
     assert all(spec.description for spec in AGGREGATIONS.values())
 
 
+def test_empty_input_value_only_for_count() -> None:
+    """COUNT na pustym zbiorze = 0, a jego re-agregacja SUM dałaby NULL (A4)."""
+    assert {name: spec.empty_input_value for name, spec in AGGREGATIONS.items()} == {
+        "SUM": None,
+        "COUNT": 0,
+        "MIN": None,
+        "MAX": None,
+        "COUNT_DISTINCT": None,
+    }
+
+
 def test_scalar_functions_content() -> None:
     assert {n: (s.min_args, s.max_args) for n, s in SCALAR_FUNCTIONS.items()} == {
         "ROUND": (1, 2),

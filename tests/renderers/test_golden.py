@@ -22,7 +22,7 @@ from app.planner.builder import build_logical_query
 from app.renderers.base import SqlRenderer
 from app.renderers.errors import NonAdditiveMeasureError
 from app.renderers.raw_table import RawTableRenderer
-from app.renderers.rollup import RollupRenderer, rollup_glob_for
+from app.renderers.rollup import RollupRenderer
 from app.semantic.resolver import SemanticModel
 from tests.conftest import make_request
 
@@ -31,6 +31,12 @@ UPDATE = os.environ.get("UPDATE_GOLDEN") == "1"
 
 BQ_TABLE = "bigquery-public-data.new_york_taxi_trips.tlc_yellow_trips_2022"
 DUCKDB_RAW_TABLE = "raw_trips"
+GOLDEN_ROLLUP_FILES = (
+    "./data/nyc_taxi/pickup_date=2022-12-01/rollup-00000001.parquet",
+    "./data/nyc_taxi/pickup_date=2022-12-02/rollup-00000002.parquet",
+)
+"""Stała lista plików dla przypadków golden – testowana jest struktura zapytania; listę
+plików dla zakresu dat wyznacza migawka indeksu (``PartitionSnapshot.files_for``)."""
 
 VARIANTS: dict[str, str] = {
     "rollup_duckdb": "duckdb",
@@ -101,7 +107,7 @@ ROLLUP_UNSUPPORTED = {"holistic"}
 def renderer_for(variant: str, model: SemanticModel) -> SqlRenderer:
     match variant:
         case "rollup_duckdb":
-            return RollupRenderer(rollup_glob_for(model.config.storage.local_cache))
+            return RollupRenderer(GOLDEN_ROLLUP_FILES)
         case "raw_bigquery":
             return RawTableRenderer(BQ_TABLE)
         case _:
@@ -141,22 +147,28 @@ def test_holistic_rejected_by_rollup_renderer(models: dict[str, SemanticModel]) 
         renderer.render(plan, "duckdb")
 
 
+SPEC_FILES = [
+    f"./data/nyc_taxi/pickup_date=2022-12-{day:02d}/rollup-00000001.parquet" for day in range(1, 24)
+]
+"""Pliki migawki dla zakresu 2022-12-01..23 z przykładu w dok. 03 (pierwsza publikacja)."""
+SPEC_FILES_SQL = ", ".join(f"'{path}'" for path in SPEC_FILES)
+
+
 def test_spec_example_matches_documented_compiled_sql(models: dict[str, SemanticModel]) -> None:
     """``compiled_sql`` z przykładowej odpowiedzi w dok. 03, sekcja 4 – dosłownie."""
     documented = (
-        "SELECT pickup_date, vendor_id, SUM(trips_count) AS trips_count, SUM(total_revenue) "
-        "AS total_revenue, (SUM(total_tip_amount) / NULLIF(SUM(total_fare_amount), 0)) * 100 "
+        "SELECT pickup_date, vendor_id, COALESCE(SUM(trips_count), 0) AS trips_count, "
+        "SUM(total_revenue) AS total_revenue, "
+        "(SUM(total_tip_amount) / NULLIF(SUM(total_fare_amount), 0)) * 100 "
         "AS tip_to_fare_ratio_pct, SUM(total_distance_miles) / "
         "NULLIF((SUM(total_duration_seconds) / 3600.0), 0) AS avg_trip_speed_mph "
-        "FROM read_parquet('./data/nyc_taxi/pickup_date=*/rollup.parquet', "
+        f"FROM read_parquet([{SPEC_FILES_SQL}], "
         "hive_partitioning = true) WHERE pickup_date >= CAST('2022-12-01' AS DATE) "
         "AND pickup_date <= CAST('2022-12-23' AS DATE) AND payment_type = '1' "
         "GROUP BY pickup_date, vendor_id ORDER BY pickup_date ASC LIMIT 1000"
     )
     plan = build_logical_query(make_request(), models)
-    actual = renderer_for("rollup_duckdb", models["nyc_yellow_taxi_analytics"]).render(
-        plan, "duckdb"
-    )
+    actual = RollupRenderer(SPEC_FILES).render(plan, "duckdb")
     assert normalize(actual, "duckdb") == normalize(documented, "duckdb")
 
 

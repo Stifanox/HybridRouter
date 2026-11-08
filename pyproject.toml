@@ -66,10 +66,24 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 check_untyped_defs = true
 
-# Tryb ścisły (ADR-013, zasady wspólne pkt 4) dla rdzenia kompilatora.
+# Tryb ścisły (ADR-013, zasady wspólne pkt 4) dla rdzenia kompilatora oraz (od A4) dla
+# synchronizacji, wykonawców i routera.
 [[tool.mypy.overrides]]
-module = ["app.config.*", "app.semantic.*", "app.planner.*", "app.renderers.*"]
+module = [
+    "app.config.*",
+    "app.semantic.*",
+    "app.planner.*",
+    "app.renderers.*",
+    "app.sync.*",
+    "app.executors.*",
+    "app.router.*",
+]
 strict = true
+
+# pyarrow nie publikuje adnotacji typów (brak py.typed); typy z pyarrow są traktowane jako Any.
+[[tool.mypy.overrides]]
+module = ["pyarrow", "pyarrow.*"]
+ignore_missing_imports = true
 
 [tool.pydantic-mypy]
 init_forbid_extra = true

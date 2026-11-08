@@ -11,7 +11,7 @@ storage:
   local_cache:
     base_path: "./data/nyc_taxi"
     file_format: "parquet"
-    partition_scheme: "hive" # data/nyc_taxi/pickup_date=YYYY-MM-DD/rollup.parquet
+    partition_scheme: "hive" # data/nyc_taxi/pickup_date=YYYY-MM-DD/rollup-<wersja>.parquet + manifest.json
     partition_key: "pickup_date" # musi być nazwą wymiaru typu date z in_rollup: true
     # Domyślny zakres materializacji dla SyncWorkera (gdy nie podano --start-date/--end-date).
     # NIE jest źródłem prawdy dla routera – ten sprawdza fizyczną obecność partycji (Moduł 2).

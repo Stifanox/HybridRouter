@@ -1,18 +1,25 @@
-"""Wspólne fixture'y: model semantyczny nyc_taxi.yaml i fabryka żądań (etap A3)."""
+"""Wspólne fixture'y: model semantyczny nyc_taxi.yaml i fabryka żądań (etap A3), dane
+syntetyczne i zbudowane z nich rollupy (etap A4)."""
 
 from __future__ import annotations
 
 import copy
+import datetime as dt
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
 import pytest
 import yaml
 
 from app.api.models import QueryRequest
 from app.config.loader import load_model_dict, load_model_file
 from app.semantic.resolver import SemanticModel, build_semantic_model
+from app.sync.local_builder import build_local_rollups
+from app.sync.materializer import MaterializationResult
+from app.sync.partition_index import PartitionIndex, PartitionSnapshot
+from tests.fixtures.synthetic import generate_trips
 
 NYC_TAXI_YAML = Path(__file__).resolve().parents[1] / "configs" / "nyc_taxi.yaml"
 MODEL_NAME = "nyc_yellow_taxi_analytics"
@@ -69,3 +76,47 @@ def make_request(**overrides: Any) -> QueryRequest:
     data = copy.deepcopy(EXAMPLE_REQUEST)
     data.update(overrides)
     return QueryRequest.model_validate(data)
+
+
+# --------------------------------------------------------------------------- #
+# Dane syntetyczne i rollupy (etap A4)
+# --------------------------------------------------------------------------- #
+
+SYNTH_START = dt.date(2022, 12, 1)
+SYNTH_DAYS = 12
+SYNTH_ROWS_PER_DAY = 250
+SYNTH_GAP = dt.date(2022, 12, 4)
+"""Dzień bez danych (``empty_day_offsets=(3,)``) – dziura w zakresie partycji."""
+SYNTH_END = SYNTH_START + dt.timedelta(days=SYNTH_DAYS - 1)
+SYNTH_RANGE = (SYNTH_START, SYNTH_END)
+RAW_TABLE = "raw_trips"
+
+
+@pytest.fixture(scope="session")
+def synthetic_raw() -> pa.Table:
+    return generate_trips(
+        days=SYNTH_DAYS,
+        rows_per_day=SYNTH_ROWS_PER_DAY,
+        start=SYNTH_START,
+        empty_day_offsets=((SYNTH_GAP - SYNTH_START).days,),
+    )
+
+
+@pytest.fixture(scope="session")
+def synthetic_rollups(
+    tmp_path_factory: pytest.TempPathFactory, synthetic_raw: pa.Table, nyc_model: SemanticModel
+) -> MaterializationResult:
+    """Dzienne rollupy zbudowane z ``synthetic_raw`` (katalog tymczasowy sesji)."""
+    base_path = tmp_path_factory.mktemp("rollups")
+    return build_local_rollups(synthetic_raw, nyc_model.config, SYNTH_RANGE, base_path)
+
+
+@pytest.fixture(scope="session")
+def rollup_base_path(synthetic_rollups: MaterializationResult) -> Path:
+    return synthetic_rollups.publication.manifest_path.parent
+
+
+@pytest.fixture(scope="session")
+def rollup_snapshot(rollup_base_path: Path) -> PartitionSnapshot:
+    """Migawka opublikowanych rollupów syntetycznych (wersja 1, 11 dni)."""
+    return PartitionIndex(rollup_base_path, "pickup_date").snapshot()

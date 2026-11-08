@@ -41,6 +41,11 @@ class AggregationSpec:
     name: str
     rollup_reaggregate: str | None
     description: str
+    empty_input_value: int | None = None
+    """Wynik agregacji na **pustym** zbiorze wejściowym, gdy różni się on od wyniku funkcji
+    re-agregacji (``COUNT`` -> 0, a ``SUM`` po pustym rollupie -> ``NULL``). Renderer rollupu
+    opakowuje wtedy re-agregację w ``COALESCE(..., empty_input_value)`` (wykryte testami
+    różnicowymi A4: zapytanie bez wymiarów, którego filtry nie pasują do żadnego wiersza)."""
     dialect_renderers: Mapping[str, DialectRenderer] = field(
         default_factory=lambda: MappingProxyType({}), compare=False, hash=False
     )
@@ -87,7 +92,12 @@ class FunctionSpec:
 
 _AGGREGATION_SPECS: tuple[AggregationSpec, ...] = (
     AggregationSpec("SUM", "SUM", "Suma; rozdzielna – sumy dzienne sumują się."),
-    AggregationSpec("COUNT", "SUM", "Liczność; rozdzielna – liczności dzienne się sumują."),
+    AggregationSpec(
+        "COUNT",
+        "SUM",
+        "Liczność; rozdzielna – liczności dzienne się sumują.",
+        empty_input_value=0,
+    ),
     AggregationSpec("MIN", "MIN", "Minimum; rozdzielna – minimum z minimów dziennych."),
     AggregationSpec("MAX", "MAX", "Maksimum; rozdzielna – maksimum z maksimów dziennych."),
     AggregationSpec(

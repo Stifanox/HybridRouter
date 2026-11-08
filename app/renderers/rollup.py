@@ -1,9 +1,13 @@
-"""``RollupRenderer`` – zapytanie do dziennych rollupów Parquet (DuckDB, ADR-002/003).
+"""``RollupRenderer`` – zapytanie do dziennych rollupów Parquet (DuckDB, ADR-002/003/005).
 
-* ``FROM read_parquet('<glob>', hive_partitioning = true)`` – kolumna partycji
+* ``FROM read_parquet(['<plik>', ...], hive_partitioning = true)`` – **jawna lista**
+  niezmiennych plików z migawki indeksu partycji (``PartitionSnapshot.files_for``), nie
+  wzorzec ``*``: katalog dnia może chwilowo zawierać kilka wersji pliku (stara czeka na
+  usunięcie po okresie karencji), a wzorzec policzyłby je wszystkie. Kolumna partycji
   (``pickup_date``) pochodzi z nazwy katalogu Hive,
 * liść ``MeasureRef`` -> funkcja re-agregacji z rejestru na kolumnie o nazwie miary,
-  np. ``SUM(total_fare_amount)``, ``SUM(trips_count)`` (``COUNT -> SUM``),
+  np. ``SUM(total_fare_amount)``, ``COALESCE(SUM(trips_count), 0)`` (``COUNT -> SUM``;
+  ``COALESCE`` przywraca wynik ``COUNT`` na pustym wejściu – ``AggregationSpec.empty_input_value``),
 * wymiar -> sama nazwa kolumny.
 
 Miara holistyczna (``rollup_reaggregate = None``) lub wymiar spoza rollupu oznaczają, że
@@ -12,9 +16,11 @@ router przepuścił plan niespełniający Warunku 3 lub 1 – zgłaszany jest b�
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from sqlglot import exp
 
-from app.config.schemas import BaseMeasureConfig, LocalCacheConfig
+from app.config.schemas import BaseMeasureConfig
 from app.planner.logical_plan import PlannedDimension
 from app.renderers.base import SqlRenderer, aggregate
 from app.renderers.errors import (
@@ -24,33 +30,24 @@ from app.renderers.errors import (
 )
 from app.semantic.registry import get_aggregation
 
-ROLLUP_FILE_NAME = "rollup.parquet"
-
-
-def rollup_glob(base_path: str, partition_key: str) -> str:
-    """Wzorzec plików rollupu: ``{base_path}/{partition_key}=*/rollup.parquet``.
-
-    Wzorzec jawnie wskazuje ``rollup.parquet``, więc pliki ``.tmp`` (ADR-005) nigdy nie są
-    czytane.
-    """
-    return f"{base_path.rstrip('/')}/{partition_key}=*/{ROLLUP_FILE_NAME}"
-
-
-def rollup_glob_for(cache: LocalCacheConfig) -> str:
-    """Wzorzec plików rollupu dla sekcji ``storage.local_cache`` modelu."""
-    return rollup_glob(cache.base_path, cache.partition_key)
-
 
 class RollupRenderer(SqlRenderer):
-    """Renderer dla dziennych rollupów Parquet w układzie Hive."""
+    """Renderer dla dziennych rollupów Parquet w układzie Hive.
 
-    def __init__(self, parquet_glob: str) -> None:
-        self.parquet_glob = parquet_glob
+    :param files: niepusta lista ścieżek plików rollupu (z jednej migawki indeksu).
+    """
+
+    def __init__(self, files: Sequence[str]) -> None:
+        if isinstance(files, str):
+            raise TypeError("RollupRenderer expects a list of file paths, not a single string")
+        if not files:
+            raise ValueError("RollupRenderer needs at least one rollup file")
+        self.files = tuple(files)
 
     def source(self) -> exp.Expr:
         read_parquet = exp.ReadParquet(
             expressions=[
-                exp.Literal.string(self.parquet_glob),
+                exp.Array(expressions=[exp.Literal.string(path) for path in self.files]),
                 exp.EQ(this=exp.column("hive_partitioning"), expression=exp.true()),
             ]
         )
@@ -67,4 +64,10 @@ class RollupRenderer(SqlRenderer):
             raise UnsupportedFunctionError(f"unknown aggregation '{measure.aggregation}'")
         if spec.rollup_reaggregate is None:
             raise NonAdditiveMeasureError(name, spec.name)
-        return aggregate(spec.rollup_reaggregate, exp.column(name))
+        reaggregated = aggregate(spec.rollup_reaggregate, exp.column(name))
+        if spec.empty_input_value is None:
+            return reaggregated
+        # COUNT na pustym wejściu daje 0, a SUM(liczności) z pustego rollupu – NULL.
+        return exp.Coalesce(
+            this=reaggregated, expressions=[exp.Literal.number(spec.empty_input_value)]
+        )

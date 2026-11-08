@@ -30,7 +30,7 @@ from app.renderers.errors import (
     UnsupportedFunctionError,
 )
 from app.renderers.raw_table import RawTableRenderer
-from app.renderers.rollup import RollupRenderer, rollup_glob, rollup_glob_for
+from app.renderers.rollup import RollupRenderer
 from app.semantic import registry
 from app.semantic.ast_nodes import (
     BinaryOp,
@@ -47,7 +47,8 @@ from tests.conftest import make_request
 
 A = MeasureRef("total_tip_amount")
 B = MeasureRef("total_fare_amount")
-ROLLUP = RollupRenderer("./data/nyc_taxi/pickup_date=*/rollup.parquet")
+ROLLUP_FILE = "./data/nyc_taxi/pickup_date=2022-12-01/rollup-00000001.parquet"
+ROLLUP = RollupRenderer([ROLLUP_FILE])
 RAW = RawTableRenderer("raw_trips")
 
 
@@ -344,26 +345,34 @@ def test_number_filter_literal(nyc_model: SemanticModel, base_plan: LogicalQuery
 # --------------------------------------------------------------------------- #
 
 
-def test_rollup_glob(nyc_model: SemanticModel) -> None:
-    assert rollup_glob("./data/nyc_taxi", "pickup_date") == (
-        "./data/nyc_taxi/pickup_date=*/rollup.parquet"
+def test_rollup_source_is_explicit_file_list(base_plan: LogicalQuery) -> None:
+    files = [
+        "/tmp/x/d=2022-12-01/rollup-00000003.parquet",
+        "/tmp/x/d=2022-12-02/rollup-00000001.parquet",
+    ]
+    sql = RollupRenderer(files).render(base_plan, "duckdb")
+    assert (
+        "FROM READ_PARQUET(['/tmp/x/d=2022-12-01/rollup-00000003.parquet', "
+        "'/tmp/x/d=2022-12-02/rollup-00000001.parquet'], hive_partitioning = TRUE)"
+    ) in sql
+
+
+def test_rollup_requires_files() -> None:
+    with pytest.raises(ValueError, match="at least one"):
+        RollupRenderer([])
+    with pytest.raises(TypeError, match="list of file paths"):
+        RollupRenderer("./data/nyc_taxi/pickup_date=*/rollup.parquet")
+
+
+def test_rollup_path_with_apostrophe_is_escaped(base_plan: LogicalQuery) -> None:
+    sql = RollupRenderer(["/data/o'neil/d=2022-12-01/rollup-00000001.parquet"]).render(
+        base_plan, "duckdb"
     )
-    assert rollup_glob("/srv/data/", "d") == "/srv/data/d=*/rollup.parquet"
-    assert rollup_glob_for(nyc_model.config.storage.local_cache) == (
-        "./data/nyc_taxi/pickup_date=*/rollup.parquet"
-    )
-
-
-def test_rollup_source(base_plan: LogicalQuery) -> None:
-    sql = RollupRenderer("/tmp/x/d=*/rollup.parquet").render(base_plan, "duckdb")
-    assert "FROM READ_PARQUET('/tmp/x/d=*/rollup.parquet', hive_partitioning = TRUE)" in sql
-
-
-def test_rollup_glob_with_apostrophe_is_escaped(base_plan: LogicalQuery) -> None:
-    sql = RollupRenderer("/data/o'neil/d=*/rollup.parquet").render(base_plan, "duckdb")
     table = sqlglot.parse_one(sql, read="duckdb").find(exp.ReadParquet)
     assert table is not None
-    assert table.expressions[0].this == "/data/o'neil/d=*/rollup.parquet"
+    array = table.expressions[0]
+    assert isinstance(array, exp.Array)
+    assert array.expressions[0].this == "/data/o'neil/d=2022-12-01/rollup-00000001.parquet"
 
 
 def test_rollup_rejects_non_additive_measure(
@@ -392,9 +401,15 @@ def test_rollup_rejects_non_rollup_dimension(models: dict[str, SemanticModel]) -
 def test_rollup_count_reaggregated_as_sum(
     nyc_model: SemanticModel, base_plan: LogicalQuery
 ) -> None:
+    # COALESCE: COUNT na pustym wejściu = 0, SUM po pustym rollupie = NULL (wykryte w A4).
     plan = with_metric(base_plan, MeasureRef("trips_count"), nyc_model)
-    assert ROLLUP.render(plan, "duckdb").startswith("SELECT SUM(trips_count) AS m")
+    assert ROLLUP.render(plan, "duckdb").startswith("SELECT COALESCE(SUM(trips_count), 0) AS m")
     assert RAW.render(plan, "duckdb").startswith("SELECT COUNT(1) AS m")
+
+
+def test_rollup_sum_has_no_coalesce(nyc_model: SemanticModel, base_plan: LogicalQuery) -> None:
+    plan = with_metric(base_plan, MeasureRef("total_revenue"), nyc_model)
+    assert ROLLUP.render(plan, "duckdb").startswith("SELECT SUM(total_revenue) AS m")
 
 
 def test_rollup_min_max(base_plan: LogicalQuery) -> None:
@@ -412,8 +427,7 @@ def test_rollup_min_max(base_plan: LogicalQuery) -> None:
     )
     assert ROLLUP.render(plan, "duckdb") == (
         "SELECT MIN(min_fare) AS lo, MAX(max_fare) AS hi "
-        "FROM READ_PARQUET('./data/nyc_taxi/pickup_date=*/rollup.parquet', "
-        "hive_partitioning = TRUE)"
+        f"FROM READ_PARQUET(['{ROLLUP_FILE}'], hive_partitioning = TRUE)"
     )
     assert RAW.render(plan, "duckdb") == (
         "SELECT MIN(fare_amount) AS lo, MAX(fare_amount) AS hi FROM raw_trips"
