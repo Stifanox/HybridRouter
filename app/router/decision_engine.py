@@ -1,7 +1,9 @@
 """Silnik decyzyjny routera – kwalifikacja zapytania do lokalnego cache (dok. 03, Moduł 2).
 
-Faza 1 zawiera wyłącznie ocenę Warunków 1–3 (:func:`check_local_eligibility`); wybór
-silnika dla trybów ``auto`` / ``force_bigquery`` i fallback do BigQuery dochodzą w fazie 2.
+* :func:`check_local_eligibility` – ocena Warunków 1–3 (etap A4),
+* :func:`route_query` – wybór silnika wg ``execution_mode`` (etap A5). Decyzja
+  ``bigquery`` jest w fazie 1 wyłącznie *wynikiem* routingu: API odpowiada na nią HTTP 501,
+  bo wykonawca BigQuery (i Cost Guard) dochodzi w fazie 2.
 
 * **Warunek 1 (ziarnistość):** każdy wymiar użyty w ``dimensions``, ``filters`` i
   ``order_by`` (``LogicalQuery.used_dimensions``) ma ``in_rollup: true``.
@@ -27,6 +29,7 @@ import datetime as dt
 import typing
 from dataclasses import dataclass
 
+from app.api.models import Engine, ExecutionMode
 from app.planner.logical_plan import DateRange, LogicalQuery
 from app.router.exceptions import (
     CacheMissInForcedModeError,
@@ -86,6 +89,22 @@ class LocalEligibility:
     def reason(self) -> str | None:
         """Powód pierwszego niespełnionego warunku (kolejność 1, 2, 3) albo ``None``."""
         return next((c.reason for c in self.conditions if not c.satisfied), None)
+
+    def to_details(self) -> dict[str, typing.Any]:
+        """Pełna diagnostyka Warunków 1–3 jako słownik JSON (``details`` odpowiedzi API)."""
+        return {
+            "conditions": {
+                c.condition: {"satisfied": c.satisfied, "reasons": list(c.reasons)}
+                for c in self.conditions
+            },
+            "unsupported_dimensions": list(self.unsupported_dimensions),
+            "date_range": None
+            if self.date_range is None
+            else [self.date_range[0].isoformat(), self.date_range[1].isoformat()],
+            "missing_days": [day.isoformat() for day in self.missing_days],
+            "missing_day_count": self.missing_day_count,
+            "non_additive_measures": list(self.non_additive_measures),
+        }
 
     def raise_if_ineligible(self) -> None:
         """Tryb ``force_duckdb``: wyjątek dla pierwszego niespełnionego warunku.
@@ -166,6 +185,57 @@ def check_local_eligibility(
         missing_days=tuple(missing),
         missing_day_count=missing_count,
         non_additive_measures=non_additive,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class RoutingDecision:
+    """Wybrany silnik wraz z powodem (``routing_reason`` w telemetrii).
+
+    ``eligibility`` – ocena Warunków 1–3; ``None`` w trybie ``force_bigquery`` (cache nie
+    jest sprawdzany).
+    """
+
+    engine: Engine
+    mode: ExecutionMode
+    reason: str
+    eligibility: LocalEligibility | None
+
+
+def route_query(
+    plan: LogicalQuery, model: SemanticModel, mode: ExecutionMode, snapshot: PartitionSnapshot
+) -> RoutingDecision:
+    """Wybór silnika (dok. 03, Moduł 2 – algorytm wyboru).
+
+    * ``force_bigquery`` -> ``bigquery`` bez sprawdzania cache,
+    * ``force_duckdb`` -> ``duckdb`` albo wyjątek pierwszego niespełnionego warunku,
+    * ``auto`` -> ``duckdb``, gdy Warunki 1–3 są spełnione; inaczej Full Fallback
+      (ADR-004) do ``bigquery`` z powodem w ``reason``.
+
+    :raises GranularityNotSupportedInLocalCacheError: ``force_duckdb``, Warunek 1.
+    :raises CacheMissInForcedModeError: ``force_duckdb``, Warunek 2.
+    :raises NonAdditiveMeasureInLocalCacheError: ``force_duckdb``, Warunek 3.
+    """
+    if mode == "force_bigquery":
+        return RoutingDecision("bigquery", mode, "Forced by execution_mode 'force_bigquery'.", None)
+    eligibility = check_local_eligibility(plan, model, snapshot)
+    if mode == "force_duckdb":
+        eligibility.raise_if_ineligible()
+        reason = f"Forced by execution_mode 'force_duckdb'; {_local_reason(eligibility)}"
+        return RoutingDecision("duckdb", mode, reason, eligibility)
+    if eligibility.eligible:
+        return RoutingDecision("duckdb", mode, _local_reason(eligibility), eligibility)
+    reason = f"Full fallback to BigQuery: {eligibility.reason}."
+    return RoutingDecision("bigquery", mode, reason, eligibility)
+
+
+def _local_reason(eligibility: LocalEligibility) -> str:
+    if eligibility.date_range is None:  # Warunek 2 spełniony => zakres ograniczony
+        raise ValueError("local routing requires a bounded date range")
+    start, end = eligibility.date_range
+    return (
+        f"All dimensions in rollup and date range [{start.isoformat()}..{end.isoformat()}] "
+        "available in local Parquet cache."
     )
 
 

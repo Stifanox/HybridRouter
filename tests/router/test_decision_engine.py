@@ -13,7 +13,9 @@ from app.planner.logical_plan import LogicalQuery
 from app.router.decision_engine import (
     MAX_REPORTED_MISSING_DAYS,
     ConditionCheck,
+    _local_reason,
     check_local_eligibility,
+    route_query,
 )
 from app.router.exceptions import (
     CacheMissInForcedModeError,
@@ -278,3 +280,105 @@ def test_model_mismatch(
 def test_partition_key_mismatch(nyc_model: SemanticModel, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="partition key mismatch"):
         check_local_eligibility(_plan(nyc_model), nyc_model, PartitionSnapshot(tmp_path, "day"))
+
+
+# --------------------------------------------------------------------------- #
+# Wybór silnika wg execution_mode (etap A5)
+# --------------------------------------------------------------------------- #
+
+
+def test_route_auto_local(nyc_model: SemanticModel, index: PartitionSnapshot) -> None:
+    decision = route_query(_plan(nyc_model), nyc_model, "auto", index)
+    assert decision.engine == "duckdb"
+    assert decision.mode == "auto"
+    assert decision.eligibility is not None and decision.eligibility.eligible
+    assert decision.reason == (
+        "All dimensions in rollup and date range [2022-12-05..2022-12-12] "
+        "available in local Parquet cache."
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"dimensions": ["dropoff_location_id"]}, "Dimension 'dropoff_location_id' not present"),
+        ({"filters": WITH_GAP}, "Local cache is missing 1 day(s)"),
+        ({"metrics": ["unique_pickup_zones"]}, "Measure 'unique_pickup_zones' (COUNT_DISTINCT)"),
+    ],
+)
+def test_route_auto_full_fallback(
+    nyc_model: SemanticModel, index: PartitionSnapshot, overrides: dict[str, Any], expected: str
+) -> None:
+    decision = route_query(_plan(nyc_model, **overrides), nyc_model, "auto", index)
+    assert decision.engine == "bigquery"
+    assert decision.reason.startswith("Full fallback to BigQuery: ")
+    assert expected in decision.reason
+    assert decision.eligibility is not None and not decision.eligibility.eligible
+
+
+def test_route_force_duckdb(nyc_model: SemanticModel, index: PartitionSnapshot) -> None:
+    decision = route_query(_plan(nyc_model), nyc_model, "force_duckdb", index)
+    assert decision.engine == "duckdb"
+    assert decision.reason.startswith("Forced by execution_mode 'force_duckdb'; All dimensions")
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error"),
+    [
+        ({"dimensions": ["dropoff_location_id"]}, GranularityNotSupportedInLocalCacheError),
+        ({"filters": WITH_GAP}, CacheMissInForcedModeError),
+        ({"metrics": ["unique_pickup_zones"]}, NonAdditiveMeasureInLocalCacheError),
+    ],
+)
+def test_route_force_duckdb_raises(
+    nyc_model: SemanticModel,
+    index: PartitionSnapshot,
+    overrides: dict[str, Any],
+    error: type[RoutingError],
+) -> None:
+    with pytest.raises(error):
+        route_query(_plan(nyc_model, **overrides), nyc_model, "force_duckdb", index)
+
+
+def test_route_force_bigquery_skips_cache(nyc_model: SemanticModel, tmp_path: Path) -> None:
+    empty = PartitionIndex(tmp_path, "pickup_date").snapshot()
+    decision = route_query(_plan(nyc_model), nyc_model, "force_bigquery", empty)
+    assert decision.engine == "bigquery"
+    assert decision.eligibility is None
+    assert decision.reason == "Forced by execution_mode 'force_bigquery'."
+
+
+def test_eligibility_details(nyc_model: SemanticModel, index: PartitionSnapshot) -> None:
+    plan = _plan(nyc_model, filters=WITH_GAP, metrics=["unique_pickup_zones"])
+    details = check_local_eligibility(plan, nyc_model, index).to_details()
+    assert details == {
+        "conditions": {
+            "granularity": {"satisfied": True, "reasons": []},
+            "time_coverage": {
+                "satisfied": False,
+                "reasons": [
+                    "Local cache is missing 1 day(s) of 2022-12-01..2022-12-12: 2022-12-04"
+                ],
+            },
+            "additivity": {
+                "satisfied": False,
+                "reasons": [
+                    "Measure 'unique_pickup_zones' (COUNT_DISTINCT) cannot be re-aggregated "
+                    "from local rollup (used by metric 'unique_pickup_zones')"
+                ],
+            },
+        },
+        "unsupported_dimensions": [],
+        "date_range": ["2022-12-01", "2022-12-12"],
+        "missing_days": ["2022-12-04"],
+        "missing_day_count": 1,
+        "non_additive_measures": ["unique_pickup_zones"],
+    }
+
+
+def test_local_reason_requires_bounded_range(
+    nyc_model: SemanticModel, index: PartitionSnapshot
+) -> None:
+    unbounded = check_local_eligibility(_plan(nyc_model, filters=[]), nyc_model, index)
+    with pytest.raises(ValueError, match="bounded date range"):
+        _local_reason(unbounded)

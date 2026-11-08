@@ -67,7 +67,7 @@ warn_unused_ignores = true
 check_untyped_defs = true
 
 # Tryb ścisły (ADR-013, zasady wspólne pkt 4) dla rdzenia kompilatora oraz (od A4) dla
-# synchronizacji, wykonawców i routera.
+# synchronizacji, wykonawców i routera, (od A5) dla API.
 [[tool.mypy.overrides]]
 module = [
     "app.config.*",
@@ -77,6 +77,8 @@ module = [
     "app.sync.*",
     "app.executors.*",
     "app.router.*",
+    "app.api.*",
+    "app.main",
 ]
 strict = true
 
